@@ -9,6 +9,9 @@ from openai import AzureOpenAI
 from dotenv import load_dotenv
 import mysql.connector
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
@@ -216,3 +219,15 @@ async def handle_chat(data: Payload):
     bot = InnoviyaBot(data.user_id)
     reply = bot.next_step(data.text.strip())
     return {"reply": reply}
+
+----------------------------------------------
+
+
+# 1. Mount the 'build' folder from your React project
+# Assuming your structure is: root/frontend/build
+app.mount("/", StaticFiles(directory="frontend/build", html=True), name="static")
+
+# 2. Catch-all route to handle React Router (refreshing pages)
+@app.exception_handler(404)
+async def not_found_exception_handler(request, exc):
+    return FileResponse("frontend/build/index.html")
