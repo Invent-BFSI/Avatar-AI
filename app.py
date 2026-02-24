@@ -17,22 +17,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
 # ---- FastAPI setup ----
-origins = # Add your Azure Web App URL here
+
 origins = [
-    "http://localhost:3000",
-    "invest-soul-adeagbcufyhhfxc2.eastus2-01.azurewebsites.net"
+    "http://localhost:3000",  # React dev
+    "https://invest-soul-adeagbcufyhhfxc2.eastus2-01.azurewebsites.net",  # your Azure Web App (make sure https)
+    # add any custom domain here, e.g., "https://app.innoviya.ai"
 ]
 
 app = FastAPI()
 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,          # set True only if you use cookies/auth
+    allow_credentials=False,                 # True only if you need cookies/auth
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
-
 )
+
 
 
 
@@ -219,6 +221,7 @@ class InnoviyaBot:
         return float(nums[0]) if nums else 0.0
 
 # ---- FastAPI route ----
+
 @app.post("/chat")
 async def handle_chat(data: Payload):
     bot = InnoviyaBot(data.user_id)
