@@ -10,7 +10,8 @@ const AVATARS = {
   jeff:  ["business"],
   lori:  ["casual"],
 };
-
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8000/chat";
+const USER_ID = process.env.REACT_APP_USER_ID || "navin-session";
 const VOICES = [
   { label: "Jenny — EN‑US",   value: "en-US-JennyNeural"    },
   { label: "Aria — EN‑US",    value: "en-US-AriaNeural"     },
@@ -33,6 +34,7 @@ export default function App() {
   const [region, setRegion] = useState(
       process.env.REACT_APP_SPEECH_REGION || "eastus2"
     );
+  
   const [char, setChar] = useState("lisa");
   const [style, setStyle] = useState("casual-sitting");
   const [voice, setVoice] = useState("en-US-JennyNeural");
@@ -187,10 +189,55 @@ function startGreenScreenMatting(videoEl) {
     setPhase("error");
   }
 };
+ async function callBackend(text) {
+  const res = await fetch(BACKEND_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, user_id: USER_ID })
+  });
+  if (!res.ok) {
+    throw new Error(`Backend ${res.status}: ${await res.text()}`);
+  }
+  return res.json(); // { reply: "..." }
+}
 
+const askAgentAndSpeak = async (userText) => {
+  if (!synthRef.current) {
+    addLog("Avatar not connected. Click Connect first.", "err");
+    return;
+  }
+  if (!userText || !userText.trim()) {
+    addLog("Please provide some text.", "err");
+    return;
+  }
 
+  try {
+    setPhase("speaking");
+    addLog(`You: ${userText}`, "info");
 
+    // 1) Call FastAPI
+    const data = await callBackend(userText);
+    const reply = data?.reply || "Sorry, I didn't catch that.";
+    addLog(`Agent: ${reply}`, "ok");
 
+    // 2) Speak via Azure Avatar (SSML)
+    const ssml = `
+      <speak version="1.0"
+             xml:lang="en-US"
+             xmlns="http://www.w3.org/2001/10/synthesis"
+             xmlns:mstts="http://www.w3.org/2001/mstts"
+             xmlns:emo="http://www.w3.org/2009/10/emotionml">
+        <voice name="${voice}">
+          ${reply}
+        </voice>
+      </speak>`;
+    await synthRef.current.speakSsmlAsync(ssml);
+  } catch (e) {
+    addLog(`Error asking agent: ${e.message}`, "err");
+  } finally {
+    setPhase("live");
+  }
+};
   const speak = async () => {
     if (!synthRef.current || phase !== "live") return;
     setPhase("speaking");
