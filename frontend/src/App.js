@@ -246,6 +246,7 @@ function startGreenScreenMatting(videoEl) {
       <video ref={videoRef} autoPlay playsInline style={{ width: '100%', maxWidth: '600px' }} />
       <button onClick={connect} disabled={phase !== "idle"}>Connect</button>
       <button onClick={speak} disabled={phase !== "live"}>Speak</button>
+      <button onClick={() => askAgentAndSpeak(text)} disabled={phase !== "live"}>Ask Agent</button>
       <button onClick={disconnect}>Disconnect</button>
       <div className="log-box" ref={logBoxRef}>
         {logs.map((l, i) => <div key={i}>[{l.t}] {l.m}</div>)}
