@@ -1,13 +1,17 @@
 # app.py
 import os
 import logging
-import pyodbc
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from openai import AzureOpenAI
 from dotenv import load_dotenv
 import mysql.connector
+from services.customer_service import build_profile_from_conversation
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional
+import pyodbc
+from services.customer_service import build_profile_from_conversation
+
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -58,69 +62,103 @@ client = AzureOpenAI(
 
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASS"),
-        database=os.getenv("DB_NAME"),
-        ssl_ca=os.getenv("DB_SSL_CA")
+    # TODO: move to environment variables or Key Vault for production
+    conn = pyodbc.connect(
+        "DRIVER={ODBC Driver 18 for SQL Server};"
+        "SERVER=your-server.database.windows.net;"
+        "DATABASE=your-db;"
+        "UID=your-user;"
+        "PWD=your-password;"
+        "Encrypt=yes;TrustServerCertificate=no;"
     )
+    return conn
 
 
-def upsert_customer_profile(profile):
+
+
+ef upsert_customer_profile(profile: dict):
     conn = get_db_connection()
-    cursor = conn.cursor()
+    try:
+        with conn.cursor() as cur:
+            sql = """
+            EXEC dbo.UpsertCustomerProfile
+                @customer_id = ?,
+                @first_name = ?,
+                @last_name = ?,
+                @account_type = ?,
+                @customer_type = ?,
+                @address = ?,
+                @phone_number = ?,
+                @ssn_masked = ?,
+                @portfolio_status = ?,
+                @relationships = ?,
+                @retail_banking_product = ?,
+                @email_id = ?,
+                @monthly_inflow = ?,
+                @monthly_outflow = ?,
+                @total_debt = ?,
+                @risk_appetite = ?,
+                @preferred_sector = ?,
+                @investment_amount = ?,
+                @investment_period = ?,
+                @future_goals = ?;
+            """
+            params = (
+                profile.get("customer_id"),
+                profile.get("first_name"),
+                profile.get("last_name"),
+                profile.get("account_type"),
+                profile.get("customer_type"),
+                profile.get("address"),
+                profile.get("phone_number"),
+                profile.get("ssn_masked"),
+                profile.get("portfolio_status"),
+                profile.get("relationships"),
+                profile.get("retail_banking_product"),
+                profile.get("email_id"),
+                profile.get("monthly_inflow"),
+                profile.get("monthly_outflow"),
+                profile.get("total_debt"),
+                profile.get("risk_appetite"),
+                profile.get("preferred_sector"),
+                profile.get("investment_amount"),
+                profile.get("investment_period"),
+                profile.get("future_goals"),
+            )
+            cur.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
 
-    sql = """
-    INSERT INTO customer_profile (
-        customer_id, first_name, last_name, account_type, customer_type, address, phone_number, ssn_masked,
-        portfolio_status, relationships, retail_banking_product, email_id,
-        monthly_inflow, monthly_outflow, total_debt, risk_appetite, preferred_sector,
-        investment_amount, investment_period, future_goals
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    ON DUPLICATE KEY UPDATE
-        first_name=VALUES(first_name),
-        last_name=VALUES(last_name),
-        account_type=VALUES(account_type),
-        customer_type=VALUES(customer_type),
-        address=VALUES(address),
-        phone_number=VALUES(phone_number),
-        ssn_masked=VALUES(ssn_masked),
-        portfolio_status=VALUES(portfolio_status),
-        relationships=VALUES(relationships),
-        retail_banking_product=VALUES(retail_banking_product),
-        email_id=VALUES(email_id),
-        monthly_inflow=VALUES(monthly_inflow),
-        monthly_outflow=VALUES(monthly_outflow),
-        total_debt=VALUES(total_debt),
-        risk_appetite=VALUES(risk_appetite),
-        preferred_sector=VALUES(preferred_sector),
-        investment_amount=VALUES(investment_amount),
-        investment_period=VALUES(investment_period),
-        future_goals=VALUES(future_goals);
-    """
-
-    values = (
-        profile.get("customer_id"),
-        profile.get("first_name"), profile.get("last_name"),
-        profile.get("account_type"), profile.get("customer_type"),
-        profile.get("address"), profile.get("phone_number"),
-        profile.get("ssn_masked"), profile.get("portfolio_status"),
-        profile.get("relationships"), profile.get("retail_banking_product"),
-        profile.get("email_id"), profile.get("monthlyInflow"),
-        profile.get("monthlyOutflow"), profile.get("totalDebt"),
-        profile.get("riskAppetite"), profile.get("preferredSector"),
-        profile.get("investmentAmount"), profile.get("investmentPeriod"),
-        profile.get("futureGoals")
-    )
-
-    cursor.execute(sql, values)
-    conn.commit()
-    cursor.close()
-    conn.close()
 
 # ---- Conversation State Machine ----
 conversation_state = {}
+
+class ConversationPayload(BaseModel):
+    customer_id: str = Field(..., min_length=1)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    account_type: Optional[str] = None
+    customer_type: Optional[str] = None
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
+    ssn_masked: Optional[str] = None
+    portfolio_status: Optional[str] = None
+    relationships: Optional[str] = None
+    retail_banking_product: Optional[str] = None
+    email_id: Optional[EmailStr] = None
+    monthly_inflow: Optional[float] = None
+    monthly_outflow: Optional[float] = None
+    total_debt: Optional[float] = None
+    risk_appetite: Optional[str] = None
+    preferred_sector: Optional[str] = None
+    investment_amount: Optional[float] = None
+    investment_period: Optional[int] = None
+    future_goals: Optional[str] = None
+
+class UpsertResponse(BaseModel):
+    status: str
+    customer_id: str
 
 class InnoviyaBot:
     steps = [
@@ -229,6 +267,29 @@ async def handle_chat(data: Payload):
     return {"reply": reply}
 
 ----------------------------------------------
+
+
+
+@app.post("/conversation/upsert-profile", response_model=UpsertResponse)
+def upsert_profile_from_conversation(payload: ConversationPayload):
+    """
+    Accepts a conversation payload, normalizes it to profile fields,
+    and upserts into SQL Server via stored procedure.
+    """
+    try:
+        profile = build_profile_from_conversation(payload.model_dump())
+        upsert_customer_profile(profile)
+        return UpsertResponse(status="ok", customer_id=profile["customer_id"])
+    except pyodbc.Error as e:
+        # Include SQLSTATE/Native error for debugging if needed, but avoid leaking secrets
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Optional: basic health check
+@app.get("/healthz")
+def health():
+    return {"status": "up"}
 
 
 # 1. Mount the 'build' folder from your React project
