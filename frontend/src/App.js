@@ -46,6 +46,7 @@ export default function App() {
   const synthRef = useRef(null);
   const peerRef = useRef(null);
   const logBoxRef = useRef(null);
+  const mattingCleanupRef = useRef(null);
 
   // Set the SDK reference immediately
   const sdkRef = useRef(SpeechSDK);
@@ -62,50 +63,113 @@ export default function App() {
     setLogs(prev => [...prev.slice(-80), { t: ts(), m, k }]);
   }, []);
 
+// Inside App()
+function startGreenScreenMatting(videoEl) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  // We'll size once metadata is available (see onloadedmetadata below),
+  // but set a reasonable default for safety:
+  canvas.width = videoEl.videoWidth || 1280;
+  canvas.height = videoEl.videoHeight || 720;
+
+  videoEl.parentNode.insertBefore(canvas, videoEl);
+  videoEl.style.display = "none";
+
+  const keyColor = { r: 0, g: 255, b: 0 }; // #00FF00
+  const threshold = 80; // adjust as needed
+
+  let rafId = null;
+  const frame = () => {
+    if (videoEl.readyState >= 2) {
+      // keep canvas in sync if stream size changes
+      if (canvas.width !== videoEl.videoWidth && videoEl.videoWidth) {
+        canvas.width = videoEl.videoWidth;
+      }
+      if (canvas.height !== videoEl.videoHeight && videoEl.videoHeight) {
+        canvas.height = videoEl.videoHeight;
+      }
+
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = img.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const dr = d[i] - keyColor.r;
+        const dg = d[i + 1] - keyColor.g;
+        const db = d[i + 2] - keyColor.b;
+        const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+        if (dist < threshold) d[i + 3] = 0; // make near-green pixels transparent
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    rafId = requestAnimationFrame(frame);
+  };
+
+  // kick things off
+  rafId = requestAnimationFrame(frame);
+
+  // return a disposer so we can stop the loop and restore the video if needed
+  return () => {
+    if (rafId) cancelAnimationFrame(rafId);
+    // restore the original <video> element
+    videoEl.style.display = "";
+    if (canvas && canvas.parentNode) {
+      canvas.parentNode.removeChild(canvas);
+    }
+  };
+}
+
+  
   const connect = async () => {
   if (!apiKey.trim()) { addLog("API key is required.", "err"); return; }
   setPhase("init");
-  addLog("Initializing Azure Avatar with VP9 transparency...", "sys");
+  addLog("Initializing Azure Avatar...", "sys");
 
   try {
     const SDK = sdkRef.current;
     const speechConfig = SDK.SpeechConfig.fromSubscription(apiKey.trim(), region);
     speechConfig.speechSynthesisVoiceName = voice;
 
-    // 1. Configure Video Format for VP9
+    // Video format & avatar config (your existing setup)
     const videoFormat = new SDK.AvatarVideoFormat();
-    // Explicitly set the codec to vp9 in the config object
-    videoFormat.codec = "vp9"; 
-    
+    videoFormat.codec = "h264"; // or leave default; avoid SDP hacks
     const avatarConfig = new SDK.AvatarConfig(char, style, videoFormat);
-    avatarConfig.backgroundColor = "#000000"; // Transparent
 
-    // 2. Setup Peer Connection
+    // For transparency via chroma-key green
+    avatarConfig.backgroundColor = "#00FF00FF";
+
+    // --- Peer connection ---
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }] 
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
     peerRef.current = pc;
 
-    // 3. FORCE VP9 via SDP Manipulation
-    // This is the critical fix for Error 1007
-    const originalCreateOffer = pc.createOffer.bind(pc);
-    pc.createOffer = async (options) => {
-      const offer = await originalCreateOffer(options);
-      // Moves VP9 to the front of the codec list in the SDP string
-      offer.sdp = offer.sdp.replace(/m=video (.*) SAVPF (.*)/g, (match, p1, p2) => {
-        const codecs = p2.split(' ');
-        // 96 is a common dynamic payload type for VP9 in browsers
-        return `m=video ${p1} SAVPF 96 ${codecs.filter(c => c !== '96').join(' ')}`;
-      });
-      return offer;
-    };
-
+    // ✅ Add your ontrack handler here
     pc.ontrack = (e) => {
       if (e.track.kind === "video" && videoRef.current) {
         videoRef.current.srcObject = e.streams[0];
+
+        const v = videoRef.current;
+        const onMeta = () => {
+          // In case there’s an existing matting loop, stop it
+          if (mattingCleanupRef.current) {
+            mattingCleanupRef.current();
+            mattingCleanupRef.current = null;
+          }
+          // Start chroma-key matting and store the cleanup
+          mattingCleanupRef.current = startGreenScreenMatting(v);
+          v.removeEventListener("loadedmetadata", onMeta);
+        };
+
+        if (v.readyState >= 1) {
+          onMeta(); // metadata already available
+        } else {
+          v.addEventListener("loadedmetadata", onMeta, { once: true });
+        }
       }
     };
 
+    // --- Synthesizer & connect (your existing code) ---
     const synthesizer = new SDK.AvatarSynthesizer(speechConfig, avatarConfig);
     synthRef.current = synthesizer;
 
@@ -131,8 +195,15 @@ export default function App() {
     if (!synthRef.current || phase !== "live") return;
     setPhase("speaking");
     
-    const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US">
-      <voice name="${voice}">${text}</voice>
+    const ssml = `
+    <speak version="1.0"
+         xml:lang="en-US"
+         xmlns="http://www.w3.org/2001/10/synthesis"
+         xmlns:mstts="http://www.w3.org/2001/mstts"
+         xmlns:emo="http://www.w3.org/2009/10/emotionml">
+      <voice name="${voice}">
+      ${text}
+      </voice>
     </speak>`;
 
     try {
@@ -150,6 +221,24 @@ export default function App() {
     setPhase("idle");
     addLog("Disconnected.");
   };
+ const disconnect = () => {
+  try {
+    synthRef.current?.close();
+    peerRef.current?.close();
+  } finally {
+    // stop the matting loop & restore the <video>
+    if (mattingCleanupRef.current) {
+      mattingCleanupRef.current();
+      mattingCleanupRef.current = null;
+    }
+    // Also clear the video srcObject
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setPhase("idle");
+    addLog("Disconnected.");
+  }
+};
 
   return (
     <div className="app-container">
