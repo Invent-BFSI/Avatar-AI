@@ -17,7 +17,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
 # ---- FastAPI setup ----
-origins = ["http://127.0.0.1:5500", "http://localhost:5500"]
+origins = # Add your Azure Web App URL here
+origins = [
+    "http://localhost:3000",
+    "invest-soul-adeagbcufyhhfxc2.eastus2-01.azurewebsites.net"
+]
+
 app = FastAPI()
 
 app.add_middleware(
